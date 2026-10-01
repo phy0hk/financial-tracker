@@ -44,7 +44,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
 function getOrCreateLocalSecret(): string {
   const existing = localStorage.getItem(DEVICE_SECRET_KEY);
   if (existing) return existing;
-  const secret = generateSalt();
+  const secret = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : generateSalt();
   localStorage.setItem(DEVICE_SECRET_KEY, secret);
   return secret;
 }
@@ -69,14 +69,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const rawSession = localStorage.getItem(GUEST_SESSION_KEY);
         const salt = localStorage.getItem(GUEST_SALT_KEY);
-        if (!rawSession || !salt) return;
-        const session = JSON.parse(rawSession) as AuthUser;
-        if (session.id !== 'local-guest' || session.isGuest !== true || !session.isActive) throw new Error('Invalid guest session');
-        const key = await deriveMasterKey(getOrCreateLocalSecret(), salt);
-        if (active) { setUser(session); setMasterKey(key); setAccessToken(null); }
+        const deviceSecret = localStorage.getItem(DEVICE_SECRET_KEY);
+        if (!rawSession || !salt || !deviceSecret) return;
+        const session = JSON.parse(rawSession) as Partial<AuthUser>;
+        if (session.id !== 'local-guest' || session.email !== 'guest@local' || session.role !== 'user') throw new Error('Invalid guest session');
+        const key = await deriveMasterKey(deviceSecret, salt);
+        const guest: AuthUser = {
+          id: 'local-guest', email: 'guest@local', role: 'user', isActive: true,
+          createdAt: session.createdAt ?? new Date().toISOString(), isGuest: true,
+        };
+        if (active) { setUser(guest); setMasterKey(key); setAccessToken(null); }
       } catch {
         localStorage.removeItem(GUEST_SESSION_KEY);
-        localStorage.removeItem(GUEST_SALT_KEY);
       } finally {
         if (active) setIsLoading(false);
       }
@@ -104,10 +108,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     try {
       const guestSalt = getOrCreateGuestSalt();
-      const key = await deriveMasterKey(getOrCreateLocalSecret(), guestSalt);
+      const deviceSecret = getOrCreateLocalSecret();
+      const key = await deriveMasterKey(deviceSecret, guestSalt);
       const guest: AuthUser = { id: 'local-guest', email: 'guest@local', role: 'user', isActive: true, createdAt: new Date().toISOString(), isGuest: true };
       localStorage.setItem(GUEST_SALT_KEY, guestSalt);
-      localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(guest));
+      localStorage.setItem(DEVICE_SECRET_KEY, deviceSecret);
+      localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify({ id: 'local-guest', email: 'guest@local', role: 'user' }));
       localStorage.removeItem(TOKEN_KEY);
       setUser(guest); setMasterKey(key); setAccessToken(null);
     } finally { setIsLoading(false); }
@@ -117,7 +123,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMasterKey(null); setUser(null); setAccessToken(null);
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(GUEST_SESSION_KEY);
-    localStorage.removeItem(GUEST_SALT_KEY);
     await fetch(`${API_URL}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => undefined);
   }, []);
   const logout = clearSession;
