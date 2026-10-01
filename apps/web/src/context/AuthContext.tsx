@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { deriveMasterKey, generateSalt } from '@zerotracker/core/crypto';
 
 export type AuthUser = {
@@ -20,6 +20,7 @@ type AuthContextValue = {
   login(email: string, password: string, masterPassword?: string): Promise<void>;
   register(email: string, password: string, masterPassword?: string): Promise<void>;
   logout(): Promise<void>;
+  clearSession(): Promise<void>;
   loginAsGuest(): Promise<void>;
 };
 
@@ -27,6 +28,9 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 const TOKEN_KEY = 'zerotracker.accessToken';
 const SALT_PREFIX = 'zerotracker.keySalt.';
+const GUEST_SESSION_KEY = 'zt_guest_session';
+const GUEST_SALT_KEY = 'zt_guest_salt';
+const DEVICE_SECRET_KEY = 'zt_guest_device_secret';
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
@@ -37,11 +41,49 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function getOrCreateLocalSecret(): string {
+  const existing = localStorage.getItem(DEVICE_SECRET_KEY);
+  if (existing) return existing;
+  const secret = generateSalt();
+  localStorage.setItem(DEVICE_SECRET_KEY, secret);
+  return secret;
+}
+
+function getOrCreateGuestSalt(): string {
+  const existing = localStorage.getItem(GUEST_SALT_KEY);
+  if (existing) return existing;
+  const salt = generateSalt();
+  localStorage.setItem(GUEST_SALT_KEY, salt);
+  return salt;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [masterKey, setMasterKey] = useState<CryptoKey | null>(null);
   const [accessToken, setAccessToken] = useState(() => localStorage.getItem(TOKEN_KEY));
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    async function hydrateGuest() {
+      try {
+        const rawSession = localStorage.getItem(GUEST_SESSION_KEY);
+        const salt = localStorage.getItem(GUEST_SALT_KEY);
+        if (!rawSession || !salt) return;
+        const session = JSON.parse(rawSession) as AuthUser;
+        if (session.id !== 'local-guest' || session.isGuest !== true || !session.isActive) throw new Error('Invalid guest session');
+        const key = await deriveMasterKey(getOrCreateLocalSecret(), salt);
+        if (active) { setUser(session); setMasterKey(key); setAccessToken(null); }
+      } catch {
+        localStorage.removeItem(GUEST_SESSION_KEY);
+        localStorage.removeItem(GUEST_SALT_KEY);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    }
+    void hydrateGuest();
+    return () => { active = false; };
+  }, []);
 
   const authenticate = useCallback(async (path: '/auth/login' | '/auth/register', email: string, password: string, masterPassword = password) => {
     setIsLoading(true);
@@ -51,15 +93,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const salt = response.user.salt ?? localStorage.getItem(`${SALT_PREFIX}${normalizedEmail}`) ?? generateSalt();
       localStorage.setItem(`${SALT_PREFIX}${normalizedEmail}`, salt);
       const key = await deriveMasterKey(masterPassword, salt);
-      setUser(response.user);
-      setMasterKey(key);
-      if (response.accessToken) {
-        localStorage.setItem(TOKEN_KEY, response.accessToken);
-        setAccessToken(response.accessToken);
-      }
-    } finally {
-      setIsLoading(false);
-    }
+      setUser(response.user); setMasterKey(key);
+      if (response.accessToken) { localStorage.setItem(TOKEN_KEY, response.accessToken); setAccessToken(response.accessToken); }
+    } finally { setIsLoading(false); }
   }, []);
 
   const login = useCallback((email: string, password: string, masterPassword?: string) => authenticate('/auth/login', email, password, masterPassword), [authenticate]);
@@ -67,31 +103,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginAsGuest = useCallback(async () => {
     setIsLoading(true);
     try {
-      const deviceSecretKey = 'zerotracker.deviceSecret';
-      const deviceSecret = localStorage.getItem(deviceSecretKey) ?? (() => {
-        const secret = generateSalt();
-        localStorage.setItem(deviceSecretKey, secret);
-        return secret;
-      })();
-      const key = await deriveMasterKey(deviceSecret, 'zerotracker.local-only.v1');
-      setUser({ id: 'local-guest', email: 'guest@local', role: 'user', isActive: true, createdAt: new Date().toISOString(), isGuest: true });
-      setMasterKey(key);
-      setAccessToken(null);
+      const guestSalt = getOrCreateGuestSalt();
+      const key = await deriveMasterKey(getOrCreateLocalSecret(), guestSalt);
+      const guest: AuthUser = { id: 'local-guest', email: 'guest@local', role: 'user', isActive: true, createdAt: new Date().toISOString(), isGuest: true };
+      localStorage.setItem(GUEST_SALT_KEY, guestSalt);
+      localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(guest));
       localStorage.removeItem(TOKEN_KEY);
-    } finally {
-      setIsLoading(false);
-    }
+      setUser(guest); setMasterKey(key); setAccessToken(null);
+    } finally { setIsLoading(false); }
   }, []);
 
-  const logout = useCallback(async () => {
-    setMasterKey(null);
-    setUser(null);
-    setAccessToken(null);
+  const clearSession = useCallback(async () => {
+    setMasterKey(null); setUser(null); setAccessToken(null);
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(GUEST_SESSION_KEY);
+    localStorage.removeItem(GUEST_SALT_KEY);
     await fetch(`${API_URL}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => undefined);
   }, []);
-
-  const value = useMemo(() => ({ user, masterKey, accessToken, isLoading, login, register, logout, loginAsGuest }), [user, masterKey, accessToken, isLoading, login, register, logout, loginAsGuest]);
+  const logout = clearSession;
+  const value = useMemo(() => ({ user, masterKey, accessToken, isLoading, login, register, logout, clearSession, loginAsGuest }), [user, masterKey, accessToken, isLoading, login, register, logout, clearSession, loginAsGuest]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
