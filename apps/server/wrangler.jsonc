@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zerotracker-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "ACCESS_TOKEN_TTL": "15m",
+    "REFRESH_TOKEN_TTL": "30d",
+    "COOKIE_SECURE": "true",
+    "CORS_ORIGIN": "*"
+  },
+  "env": {
+    "production": {
+      "name": "zerotracker-api-production",
+      "vars": {
+        "COOKIE_SECURE": "true"
+      }
+    }
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_CLOUDFLARE_HYPERDRIVE_CONFIG_ID"
+    }
+  ]
+}

@@ -1,0 +1,199 @@
+/**
+ * Storage Abstraction Layer — contracts.
+ *
+ * This module defines the zero-knowledge record shapes and the
+ * {@link IDatabaseAdapter} interface that unifies the local (SQLite) and cloud
+ * (PostgreSQL) backends behind a single API. Concrete implementations live in
+ * `LocalSqliteAdapter.ts` and `CloudPostgresAdapter.ts`.
+ *
+ * All financial fields are E2EE ciphertext (base64). The adapter never sees
+ * plaintext amounts or descriptions — it only stores and retrieves opaque
+ * encrypted values plus their AES-GCM nonce/auth tag.
+ */
+
+/**
+ * The storage topology the app is running in.
+ */
+export enum StorageMode {
+  /** Data lives only on-device (SQLite). No network sync. */
+  LOCAL_ONLY = 'LOCAL_ONLY',
+  /** Data lives only in the cloud (PostgreSQL). No local cache. */
+  CLOUD_ONLY = 'CLOUD_ONLY',
+  /** Data is cached locally and reconciled with the cloud. */
+  HYBRID_SYNC = 'HYBRID_SYNC',
+}
+
+/**
+ * A user record.
+ *
+ * The auth fields (`email`, `passwordHash`, `salt`, `role`) are required by the
+ * server to authenticate and identify the user; they are NOT encrypted because
+ * the zero-knowledge guarantee applies to financial data, not the login
+ * credential. The user's financial records are encrypted client-side.
+ */
+export interface EncryptedUser {
+  /** Stable user id (crypto UUID). */
+  id: string;
+  /** Login email (plaintext, needed for authentication). */
+  email: string;
+  /** PBKDF2 hash of the password. */
+  passwordHash: string;
+  /** Auth role. One of `"user" | "admin"`. */
+  role: string;
+  /** Base64-encoded PBKDF2 salt. */
+  salt: string;
+  /** Whether the account is active (not suspended/deleted). */
+  isActive: boolean;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+}
+
+/**
+ * A category record. The name/icon/color are encrypted client-side.
+ */
+export interface EncryptedCategory {
+  /** Stable category id (crypto UUID). */
+  id: string;
+  /** Owning user id. */
+  userId: string;
+  /** Base64 ciphertext of the category name. */
+  encryptedName: string;
+  /** Base64 ciphertext of the icon identifier (nullable). */
+  encryptedIcon: string | null;
+  /** Base64 ciphertext of the color (nullable). */
+  encryptedColor: string | null;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+}
+
+/**
+ * An expense/transaction record.
+ *
+ * `encryptedAmount` and `encryptedDescription` are AES-GCM-256 ciphertexts
+ * derived from a single payload; `iv` and `authTag` are the shared nonce and
+ * authentication tag for that payload.
+ */
+export interface EncryptedExpense {
+  /** Stable expense id (crypto UUID). */
+  id: string;
+  /** Owning user id. */
+  userId: string;
+  /** Owning category id (nullable when the expense is uncategorized). */
+  categoryId: string | null;
+  /** Base64 ciphertext of the monetary amount. */
+  encryptedAmount: string;
+  /** Base64 ciphertext of the description (nullable). */
+  encryptedDescription: string | null;
+  /** Base64-encoded 12-byte AES-GCM initialization vector. */
+  iv: string;
+  /** Base64-encoded 16-byte AES-GCM authentication tag. */
+  authTag: string;
+  /** ISO-8601 date the expense occurred. */
+  date: string;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+}
+
+/**
+ * Sync lifecycle state for a locally-queued change.
+ */
+export type SyncStatus = 'pending' | 'synced' | 'conflict';
+
+/**
+ * The kind of mutation a sync delta represents.
+ */
+export type SyncOperation = 'insert' | 'update' | 'delete';
+
+/**
+ * A single queued change awaiting push to the cloud.
+ */
+export interface SyncDelta {
+  /** The entity type this delta applies to. */
+  entityType: 'expense' | 'category';
+  /** The id of the affected record. */
+  recordId: string;
+  /** What happened to the record. */
+  operation: SyncOperation;
+  /** The encrypted record (absent for deletes, which carry only the id). */
+  payload: Record<string, unknown> | null;
+}
+
+/**
+ * Aggregated pending deltas grouped by entity type.
+ *
+ * This is the concrete shape returned by {@link IDatabaseAdapter.getPendingSyncDeltas}
+ * (typed as `Record<string, unknown>` on the interface to stay transport-agnostic).
+ */
+export interface SyncDeltas {
+  expenses: SyncDelta[];
+  categories: SyncDelta[];
+}
+
+/**
+ * The storage abstraction.
+ *
+ * Both the local SQLite adapter and the cloud PostgreSQL adapter implement this
+ * interface, so application code is identical regardless of {@link StorageMode}.
+ *
+ * Methods that create/update records also enqueue a sync delta so the sync
+ * engine can reconcile the local and cloud copies.
+ */
+export interface IDatabaseAdapter {
+  // ------------------------------------------------------------------ expenses
+  /** Fetch all expenses for a user, most recent first. */
+  getExpenses(userId: string): Promise<EncryptedExpense[]>;
+  /** Fetch a single expense by id, or `null` when not found. */
+  getExpenseById(id: string): Promise<EncryptedExpense | null>;
+  /** Insert a new expense. The id is generated by the adapter. */
+  addExpense(expense: Omit<EncryptedExpense, 'id'>): Promise<EncryptedExpense>;
+  /** Replace an existing expense. */
+  updateExpense(expense: EncryptedExpense): Promise<EncryptedExpense>;
+  /** Delete an expense by id. */
+  deleteExpense(id: string): Promise<void>;
+
+  // --------------------------------------------------------------- categories
+  /** Fetch all categories for a user. */
+  getCategories(userId: string): Promise<EncryptedCategory[]>;
+  /** Fetch a single category by id, or `null` when not found. */
+  getCategoryById(id: string): Promise<EncryptedCategory | null>;
+  /** Insert a new category. The id is generated by the adapter. */
+  addCategory(
+    category: Omit<EncryptedCategory, 'id'>,
+  ): Promise<EncryptedCategory>;
+  /** Replace an existing category. */
+  updateCategory(category: EncryptedCategory): Promise<EncryptedCategory>;
+  /** Delete a category by id. */
+  deleteCategory(id: string): Promise<void>;
+
+  // --------------------------------------------------------------------- sync
+  /**
+   * Fetch locally-queued changes that have not yet been pushed to the cloud.
+   *
+   * For the cloud adapter this is the source of truth, so it returns an empty
+   * structure. Returns an object shaped like {@link SyncDeltas}.
+   */
+  getPendingSyncDeltas(userId: string): Promise<Record<string, unknown>>;
+  /**
+   * Mark the given record ids as synced (remove/ack their local deltas).
+   *
+   * @param ids - Record ids (expense or category) to mark as synced.
+   */
+  markSynced(ids: string[]): Promise<void>;
+}
+
+/**
+ * Generate a stable, client-side id (crypto UUID when available).
+ *
+ * Client-side id generation is important for offline-first E2EE: the same id is
+ * used on-device and in the cloud so sync can match records by id.
+ */
+export function generateId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID();
+  }
+  // Fallback for environments without WebCrypto (older runtimes).
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@zerotracker/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ZeroTracker Cloudflare Workers API",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "drizzle-orm": "^0.33.0",
+    "hono": "^4.6.5",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "drizzle-kit": "^0.24.2",
+    "wrangler": "^3.78.12"
+  }
+}

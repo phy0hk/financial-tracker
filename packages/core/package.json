@@ -1,0 +1,19 @@
+{
+  "name": "@zerotracker/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ZeroTracker core: zero-knowledge WebCrypto engine and shared primitives",
+  "main": "./src/crypto/index.ts",
+  "module": "./src/crypto/index.ts",
+  "types": "./src/crypto/index.ts",
+  "exports": {
+    ".": "./src/crypto/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./db": "./src/db/index.ts",
+        "./backup": "./src/backup/index.ts"
+  },
+  "files": [
+    "src"
+  ]
+}

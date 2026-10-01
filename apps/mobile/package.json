@@ -1,0 +1,7 @@
+{
+  "name": "@zerotracker/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ZeroTracker mobile application (workspace member — scaffolded, implementation in later sections)"
+}

@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zerotracker-db
+    environment:
+      POSTGRES_USER: zerotracker
+      POSTGRES_PASSWORD: zerotracker_secret
+      POSTGRES_DB: zerotracker_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zerotracker -d zerotracker_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  zerotracker-server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: zerotracker-server
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://zerotracker:zerotracker_secret@postgres:5432/zerotracker_db
+      JWT_SECRET: super_secret_jwt_key_change_me_in_production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  zerotracker-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000
+    container_name: zerotracker-web
+    ports:
+      - "8080:80"
+    depends_on:
+      - zerotracker-server
+
+volumes:
+  pgdata:

@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --color-surface: #0f172a;
+  --color-surface-raised: #172033;
+  --color-brand: #22d3ee;
+  --color-brand-strong: #06b6d4;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #020617;
+  color: #f8fafc;
+}
+
+@utility field {
+  @apply mt-1.5 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 outline-none transition focus:border-cyan-400;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #020617; }
+button, input, select { font: inherit; }
