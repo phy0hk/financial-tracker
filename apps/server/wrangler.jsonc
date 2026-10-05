@@ -13,7 +13,7 @@
   },
   "env": {
     "production": {
-      "name": "zerotracker-api-production",
+      "name": "financial-tracker-api-production",
       "vars": {
         "COOKIE_SECURE": "true"
       }
